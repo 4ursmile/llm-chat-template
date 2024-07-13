@@ -3,7 +3,13 @@
 const chatContainer = document.getElementById('chat-container');
 const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
-const converter = new markdownit();
+const converter = new markdownit(
+    {
+        html: true,
+        linkify: true,
+        typographer: true
+    }
+)
 let lastQuestion = '';
 let lastAnswer = '';
 let typingSpeed = 20; // milliseconds per character
