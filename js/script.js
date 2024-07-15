@@ -10,41 +10,125 @@ const converter = new markdownit(
         typographer: true
     }
 )
+let isWaitingForResponse = false;
 let lastQuestion = '';
 let lastAnswer = '';
-let typingSpeed = 20; // milliseconds per character
+lastAttemp = true;
+async function sendMessage() {
+    if (isWaitingForResponse) return;
 
-async function fetchChatHistory() {
+    const message = userInput.value.trim();
+    if (!message) return;
+
+    if (!lastAttemp)
+    {
+        removeMessage('error');
+        // remove error message if exists
+    }
+
+    appendMessage('user', message);
+    userInput.value = '';
+    userInput.style.height = '25px';
+    sendBtn.disabled = true;
+    lastQuestion = message;
+
+    isWaitingForResponse = true;
+    const generatingMsgContainer = appendMessage('assistant', '', 'generating');
+
+    // Animate the "generating" message
+    const generatingText = generatingMsgContainer.querySelector('.message');
+    new Typed(generatingText, {
+        strings: ['We are generating a response for you^300.^300.^300.'],
+        typeSpeed: 50,
+        backSpeed: 0,
+        loop: true,
+        showCursor: false,
+    });
+
     try {
-        const response = await fetch('/api/chat-history');
-        const history = await response.json();
-        history.forEach(message => {
-            appendMessage('user', message.user);
-            appendMessage('assistant', message.assistant);
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ question: message }),
         });
+
+        if (!response.ok) throw new Error('Server error');
+
+        const data = await response.json();
+        removeGeneratingMessage();
+        const assistantMsgContainer = appendMessage('assistant', '', 'typing');
+        typeAssistantMessage(assistantMsgContainer, data.answer);
+        lastAnswer = data.answer;
+        lastAttemp = true;
+        setTimeout(() => {
+            showFeedbackPanel(assistantMsgContainer);
+        }, 1000);
     } catch (error) {
-        console.error('Error fetching chat history:', error);
+        console.error('Error:', error);
+        removeMessage('generating');
+        appendMessage('assistant', 'Oops, we encountered a problem. Please try again. <img src="./assets/sorry.gif" alt="Sorry" width="30" height="30">', 'error');
+        sendBtn.disabled = false;
+        lastAttemp = false;
+    } finally {
+        isWaitingForResponse = false;
+        sendBtn.disabled = false;
     }
 }
 
-function appendMessage(sender, content) {
+function appendMessage(sender, content, type = 'normal') {
     const messageContainer = document.createElement('div');
     messageContainer.classList.add('message-container', `${sender}-message-container`);
+    if (type === 'error')
+    {
+        messageContainer.classList.add('error-message');
+    } else if (type === 'generating') {
+        messageContainer.classList.add('generating-message');
+    }
     
     const avatarDiv = document.createElement('div');
     avatarDiv.classList.add('avatar');
     avatarDiv.innerHTML = sender === 'user' ? '<i class="fas fa-user"></i>' : '<i class="fas fa-robot"></i>';
-    
+    if (type === 'generating') {
+        messageContainer.style.color = 'rgb(120, 120, 120)'
+        avatarDiv.innerHTML = '<img src="./assets/loadingholder.gif" alt="Sorry" width="30" height="30">';
+    }
     const messageDiv = document.createElement('div');
     messageDiv.classList.add('message', `${sender}-message`);
-    messageDiv.innerHTML = formatMessage(content);
+    
+    if (type !== 'generating' && type !== 'typing') {
+        messageDiv.innerHTML = formatMessage(content);
+    }
     
     messageContainer.appendChild(avatarDiv);
     messageContainer.appendChild(messageDiv);
     
     chatContainer.appendChild(messageContainer);
     chatContainer.scrollTop = chatContainer.scrollHeight;
+
+    return messageContainer;
 }
+
+function typeAssistantMessage(container, content) {
+    const messageDiv = container.querySelector('.message');
+    new Typed(messageDiv, {
+        strings: [formatMessage(content)],
+        typeSpeed: 20,
+        showCursor: false,
+        onComplete: (self) => {
+            messageDiv.innerHTML = self.strings[0];
+        }
+    });
+}
+
+function removeMessage(type='error') {
+    const Message = chatContainer.querySelector(`.${type}-message`);
+    if (Message) {
+        Message.closest('.message-container').remove();
+    }
+}
+
 
 function formatMessage(content) {
     // Use marked library to parse markdown
@@ -78,26 +162,58 @@ function typeMessage(element, content) {
 
 
 
-function addFeedbackBox() {
-    const feedbackContainer = document.createElement('div');
-    feedbackContainer.classList.add('feedback-container');
-    feedbackContainer.innerHTML = `
-        <span class="star" data-rating="1">&#9733;</span>
-        <span class="star" data-rating="2">&#9733;</span>
-        <span class="star" data-rating="3">&#9733;</span>
-        <span class="star" data-rating="4">&#9733;</span>
-        <span class="star" data-rating="5">&#9733;</span>
-    `;
-    chatContainer.appendChild(feedbackContainer);
 
-    const stars = feedbackContainer.querySelectorAll('.star');
-    stars.forEach(star => {
+function showFeedbackPanel() {
+    const feedbackPanel = document.createElement('div');
+    feedbackPanel.classList.add('feedback-panel');
+    feedbackPanel.innerHTML = `
+        <div class="feedback-stars">
+            ${[1, 2, 3, 4, 5].map(star => `<span class="star" data-rating="${star}">★</span>`).join('')}
+        </div>
+    `;
+    
+    const lastAssistantMessage = chatContainer.querySelector('.assistant-message-container:last-child');
+    lastAssistantMessage.appendChild(feedbackPanel);
+    
+    feedbackPanel.addEventListener('mouseleave', () => {
+        feedbackPanel.querySelectorAll('.star').forEach(star => star.classList.remove('active', 'hover'));
+    });
+    
+    feedbackPanel.querySelectorAll('.star').forEach(star => {
+        star.addEventListener('mouseenter', () => {
+            const rating = parseInt(star.dataset.rating);
+            feedbackPanel.querySelectorAll('.star').forEach((s, index) => {
+                s.classList.toggle('hover', index < rating);
+            });
+        });
+        
         star.addEventListener('click', () => {
-            const rating = star.dataset.rating;
+            const rating = parseInt(star.dataset.rating);
             sendFeedback(rating);
-            feedbackContainer.remove();
+            feedbackPanel.innerHTML = '<div class="feedback-thank-you">Thank you for your feedback!</div>';
+            setTimeout(() => {
+                feedbackPanel.remove();
+            }, 2000);
         });
     });
+}
+
+async function sendFeedback(rating) {
+    try {
+        await fetch('/api/feedback', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                rating,
+                question: lastQuestion,
+                answer: lastAnswer
+            }),
+        });
+    } catch (error) {
+        console.error('Error sending feedback:', error);
+    }
 }
 function setSearchingIcon() {
     sendBtn.innerHTML = '<i class="fas fa-search searching-icon"></i>';
@@ -119,6 +235,7 @@ async function sendFeedback(rating) {
             },
             body: JSON.stringify({
                 question: lastQuestion,
+                answer: lastAnswer,
                 rating: rating
             }),
         });
@@ -141,70 +258,11 @@ function animateStatusMessage(element) {
         element.textContent = "Searching" + ".".repeat(dots);
     }, 500);
 }
-
-async function sendMessage() {
-    const message = userInput.value.trim();
-    if (!message) return;
-    appendMessage('user', message);
-    userInput.value = '';
-    userInput.style.height = '25px';
-
-    sendBtn.disabled = true;
-    lastQuestion = message;
-
-    try {
-        const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ question: message }),
-        });
-
-        const reader = response.body.getReader();
-        let assistantMessage = '';
-        let statusMessage = null;
-        let animationInterval = null;
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = new TextDecoder().decode(value);
-            const data = JSON.parse(chunk);
-
-            if (data.status === 'searching') {
-                if (!statusMessage) {
-                    setSearchingIcon();
-                    statusMessage = createStatusMessage("Searching");
-                    animationInterval = animateStatusMessage(statusMessage);
-                }
-            } else if (data.status === 'generating') {
-                if (statusMessage) {
-                    clearInterval(animationInterval);
-                    statusMessage.textContent = "Generating...";
-                    setGeneratingIcon();
-                }
-            } else if (data.status === 'complete') {
-                if (statusMessage) {
-                    statusMessage.remove();
-                    clearInterval(animationInterval);
-                    setDefaultIcon();
-                }
-                appendMessage('assistant', data.answer);
-                sendBtn.disabled = false;
-                break;
-            }
-
-            if (data.answer) {
-                assistantMessage += data.answer;
-            }
-        }
-    } catch (error) {
-        console.error('Error:', error);
-        sendBtn.disabled = false;
-    }
-}
+// Auto-resize textarea
+userInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = (this.scrollHeight) + 'px';
+});
 
 sendBtn.addEventListener('click', sendMessage);
 userInput.addEventListener('keypress', (e) => {
